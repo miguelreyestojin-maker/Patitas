@@ -1,0 +1,94 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f3fbff;
+  --foreground: #143044;
+  --paper: #ffffff;
+  --cream: #fff6c2;
+  --cream-deep: #d4f2ff;
+  --ink: #143044;
+  --muted: #4a6878;
+  --sage: #7fd4f5;
+  --sage-deep: #075a78;
+  --clay: #f5c400;
+  --clay-deep: #ffe14a;
+  --earth: #3d6d86;
+  --line: #c5e8f6;
+  --rose: #7fd4f5;
+  --rose-deep: #075a78;
+  --lime: #ffe14a;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-paper: var(--paper);
+  --color-cream: var(--cream);
+  --color-cream-deep: var(--cream-deep);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-sage: var(--sage);
+  --color-sage-deep: var(--sage-deep);
+  --color-clay: var(--clay);
+  --color-clay-deep: var(--clay-deep);
+  --color-earth: var(--earth);
+  --color-line: var(--line);
+  --color-rose: var(--rose);
+  --color-rose-deep: var(--rose-deep);
+  --color-lime: var(--lime);
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI",
+    sans-serif;
+  --font-display:
+    -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI",
+    sans-serif;
+}
+
+body {
+  background:
+    radial-gradient(ellipse at 0% 0%, rgba(255, 225, 74, 0.42), transparent 34%),
+    radial-gradient(ellipse at 100% 8%, rgba(127, 212, 245, 0.5), transparent 38%),
+    var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+h1,
+h2,
+h3 {
+  font-weight: 600;
+  letter-spacing: -0.022em;
+}
+
+section[id] {
+  scroll-margin-top: 5.5rem;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.rise {
+  animation: rise 0.7s ease both;
+}
+
+.rise-delay {
+  animation-delay: 0.12s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .rise {
+    animation: none;
+  }
+}
