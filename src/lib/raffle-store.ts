@@ -1,8 +1,11 @@
 import { createHash, randomInt, timingSafeEqual } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { BlobPreconditionFailedError } from "@vercel/blob";
+import publishedNumbers from "@/data/raffle-numbers.json";
 import { raffleTotalNumbers } from "@/lib/initiatives";
 import { type RegistrationInput } from "@/lib/raffle-input";
+import { readLocalState, readState, writeState } from "@/lib/raffle-persistence";
 
 const invalidCode = "El código no es válido o ya fue utilizado.";
 const numberTaken = "Ese número ya no está disponible. Elige otro.";
@@ -51,12 +54,16 @@ export type StoreResult =
 
 const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const privateDir = join(process.cwd(), "private");
-const statePath = join(privateDir, "raffle-state.json");
 const csvPath = join(privateDir, "codigos-rifa.csv");
+
+const publishedBoard: PublicNumber[] = publishedNumbers.map((item) => ({
+  number: item.number,
+  status: item.status === "confirmado" ? "confirmado" : "disponible",
+}));
 
 let queue: Promise<void> = Promise.resolve();
 
-function withLock<T>(task: () => T): Promise<T> {
+function withLock<T>(task: () => Promise<T>): Promise<T> {
   const run = queue.then(task);
   queue = run.then(
     () => undefined,
@@ -92,12 +99,19 @@ function receiptId(store: Store) {
   return id;
 }
 
-function readStoreFile(): Store | null {
-  if (!existsSync(statePath)) {
-    return null;
+class StoreUnavailable extends Error {
+  constructor() {
+    super("missing-store");
   }
+}
 
-  const parsed: unknown = JSON.parse(readFileSync(statePath, "utf8"));
+type Loaded = {
+  store: Store;
+  etag: string | null;
+};
+
+function parseStore(raw: string): Store {
+  const parsed: unknown = JSON.parse(raw);
   if (!isStore(parsed)) {
     throw new Error("invalid-store");
   }
@@ -114,7 +128,7 @@ function isStore(value: unknown): value is Store {
 
 function createStore(): Store {
   if (!existsSync(csvPath)) {
-    throw new Error("missing-codes");
+    throw new StoreUnavailable();
   }
 
   const lines = readFileSync(csvPath, "utf8")
@@ -137,7 +151,7 @@ function createStore(): Store {
   });
 
   if (codes.length !== raffleTotalNumbers) {
-    throw new Error("missing-codes");
+    throw new StoreUnavailable();
   }
 
   const numbers: NumberRecord[] = Array.from({ length: raffleTotalNumbers }, (_, index) => ({
@@ -149,8 +163,28 @@ function createStore(): Store {
   return { codes, numbers, participations: [] };
 }
 
-function loadStore() {
-  return readStoreFile() ?? createStore();
+async function loadStore(): Promise<Loaded> {
+  const saved = await readState();
+  if (saved) {
+    return { store: parseStore(saved.raw), etag: saved.etag };
+  }
+
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    const localRaw = readLocalState();
+    if (!localRaw) {
+      throw new StoreUnavailable();
+    }
+    await writeState(localRaw, null);
+    const uploaded = await readState();
+    if (!uploaded) {
+      throw new StoreUnavailable();
+    }
+    return { store: parseStore(uploaded.raw), etag: uploaded.etag };
+  }
+
+  const created = createStore();
+  await writeState(JSON.stringify(created), null);
+  return { store: created, etag: null };
 }
 
 function replaceFile(path: string, contents: string) {
@@ -159,10 +193,6 @@ function replaceFile(path: string, contents: string) {
   writeFileSync(temporary, contents);
   copyFileSync(temporary, path);
   unlinkSync(temporary);
-}
-
-function saveStore(store: Store) {
-  replaceFile(statePath, JSON.stringify(store));
 }
 
 function markCsvUsed(code: string, number: number, participationId: string, usedAt: string) {
@@ -208,18 +238,64 @@ function checkCode(store: Store, code: string, number: number): StoreResult | nu
   return null;
 }
 
+function toPublic(store: Store): PublicNumber[] {
+  return store.numbers.map((item) => ({ number: item.number, status: item.status }));
+}
+
+async function changeStore(change: (store: Store) => StoreResult): Promise<StoreResult> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    let loaded: Loaded;
+    try {
+      loaded = await loadStore();
+    } catch (error) {
+      if (error instanceof StoreUnavailable) {
+        return failure(notReady, 503);
+      }
+      throw error;
+    }
+
+    let result: StoreResult;
+    try {
+      result = change(loaded.store);
+    } catch {
+      return failure(notReady, 503);
+    }
+    if (!result.ok) {
+      return result;
+    }
+
+    try {
+      await writeState(JSON.stringify(loaded.store), loaded.etag);
+      return result;
+    } catch (error) {
+      if (error instanceof BlobPreconditionFailedError) {
+        continue;
+      }
+      return failure(notReady, 503);
+    }
+  }
+
+  return failure(notReady, 503);
+}
+
 export function listNumbers(): Promise<PublicNumber[]> {
-  return withLock(() => {
-    const store = loadStore();
-    saveStore(store);
-    return store.numbers.map((item) => ({ number: item.number, status: item.status }));
+  return withLock(async () => {
+    try {
+      const { store } = await loadStore();
+      return toPublic(store);
+    } catch (error) {
+      if (error instanceof StoreUnavailable) {
+        return publishedBoard;
+      }
+      throw error;
+    }
   });
 }
 
 export function validateCode(code: string, number: number): Promise<StoreResult> {
-  return withLock(() => {
+  return withLock(async () => {
     try {
-      const store = loadStore();
+      const { store } = await loadStore();
       return checkCode(store, code, number) ?? { ok: true, participationId: "", number };
     } catch {
       return failure(notReady, 503);
@@ -228,9 +304,8 @@ export function validateCode(code: string, number: number): Promise<StoreResult>
 }
 
 export function registerParticipation(input: RegistrationInput): Promise<StoreResult> {
-  return withLock(() => {
-    try {
-      const store = loadStore();
+  return withLock(() =>
+    changeStore((store) => {
       const rejected = checkCode(store, input.code, input.number);
       if (rejected) {
         return rejected;
@@ -259,11 +334,8 @@ export function registerParticipation(input: RegistrationInput): Promise<StoreRe
       record.usedAt = createdAt;
       slot.status = "confirmado";
       slot.participationId = participationId;
-      saveStore(store);
       markCsvUsed(input.code, input.number, participationId, createdAt);
       return { ok: true, participationId, number: input.number };
-    } catch {
-      return failure(notReady, 503);
-    }
-  });
+    }),
+  );
 }

@@ -6,9 +6,11 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "raffle:seed": "node scripts/seed-raffle.mjs"
   },
   "dependencies": {
+    "@vercel/blob": "^2.8.2",
     "lucide-react": "^1.55.0",
     "next": "16.4.0",
     "react": "19.3.0",

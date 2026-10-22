@@ -71,12 +71,18 @@ export function NumberBoard() {
     setLoadError(null);
     try {
       const response = await fetch("/api/raffle", { cache: "no-store" });
-      if (!response.ok) {
-        throw new Error("fail");
-      }
-      const data = (await response.json()) as {
+      let data: {
+        error?: string;
         numbers?: { number: number; status: "disponible" | "confirmado" }[];
-      };
+      } = {};
+      try {
+        data = (await response.json()) as typeof data;
+      } catch {
+        data = {};
+      }
+      if (!response.ok) {
+        throw new Error(data.error || "No se pudo cargar el tablero. Inténtalo de nuevo.");
+      }
       const taken = new Set(
         (data.numbers ?? [])
           .filter((item) => item.status === "confirmado")
@@ -84,9 +90,16 @@ export function NumberBoard() {
       );
       setConfirmed(taken);
       setReady(true);
-    } catch {
+    } catch (cause) {
       setReady(false);
-      setLoadError("No se pudo cargar el tablero. Revisa tu conexión e intenta de nuevo.");
+      const offline = cause instanceof TypeError;
+      setLoadError(
+        offline
+          ? "No se pudo cargar el tablero. Revisa tu conexión e intenta de nuevo."
+          : cause instanceof Error
+            ? cause.message
+            : "No se pudo cargar el tablero. Inténtalo de nuevo.",
+      );
     }
   }, []);
 
